@@ -3,6 +3,7 @@
 import argparse
 import boto3
 import json
+from time import sleep
 
 # The Route53 endpoint is located in us-east-1 as documented
 # here https://docs.aws.amazon.com/general/latest/gr/rande.html
@@ -46,6 +47,15 @@ def read_json_contacts(path):
     with open(path, 'r') as conf:
         return json.load(conf)
 
+def read_domain_list(path):
+    result = []
+    # TODO This function should validate the domains
+    with open(path, 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            result.append(line.strip())
+    return result
+
 
 parser = argparse.ArgumentParser(description='Reggie - The AWS domain registrator')
 parser.add_argument('domainlist', type=str, nargs='?', help='File with list of domains')
@@ -66,17 +76,38 @@ if args['contacts_out'] is not None:
     print(json.dumps(info, indent=2))
     exit()
 
-if args['contacts'] is not None:
-    contacts = read_json_contacts(args['contacts'])
+if args['contacts'] is None:
+    print("Contacts JSON required!")
+    exit()
 
-domains = get_registered_domains(client)
-print("Found {} registered domains in account".format(len(domains)))
+if args['domainlist'] is None:
+    parser.print_help()
+    exit()
+
+contacts = read_json_contacts(args['contacts'])
+domains = read_domain_list(args['domainlist'])
+#registered = get_registered_domains(client)
+#print("There are {} registered domains in account".format(len(registered)))
 #print(dir(client.exceptions))
-exit()
-try:
-    result = register_domain(client, Domain=args['domain'], Contacts=contacts)
-    print(result)
-except client.exceptions.DomainLimitExceeded as e:
-    print(e)
-except Exception as e:
-    print(e)
+
+for domain in domains:
+    try:
+        result = {}
+        result = register_domain(client, Domain=domain, Contacts=contacts)
+        print("Domain: '{}'".format(domain))
+        print(result)
+        if "ResponseMetadata" in result:
+            sleep(result['ResponseMetadata']['RetryAttempts'])
+    except (client.exceptions.DomainLimitExceeded,
+            client.exceptions.OperationLimitExceeded) as e:
+        print("{}\n\nAborting! Contact AWS support and request a limit increase.".format(e))
+        exit(1)
+    except (client.exceptions.ClientError) as e:
+        print(e)
+        exit()
+    except Exception as e:
+        print("Unhandled exception: {}".format(e))
+        exit(-1)
+
+
+#botocore.exceptions.ClientError: An error occurred (ThrottlingException) when calling the RegisterDomain operation (reached max retries: 4): Rate exceeded

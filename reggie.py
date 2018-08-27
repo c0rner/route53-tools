@@ -7,7 +7,10 @@ from time import sleep
 
 # The Route53 endpoint is located in us-east-1 as documented
 # here https://docs.aws.amazon.com/general/latest/gr/rande.html
-R53REGION='us-east-1'
+_R53REGION='us-east-1'
+
+# ASCII Compatible Encoding (ACE) prefix
+_ACEPREFIX='xn--'
 
 
 def get_registered_domains(client):
@@ -27,19 +30,26 @@ def get_registered_domains(client):
         result[name] = info
     return result
 
-def get_domain_contacts(client, Domain=None):
+def get_domain_contacts(client, domain=None):
     result = {}
-    reply = client.get_domain_detail(DomainName=Domain)
+    reply = client.get_domain_detail(DomainName=domain)
     result['RegistrantContact'] = reply['RegistrantContact']
     result['AdminContact'] = reply['AdminContact']
     result['TechContact'] = reply['TechContact']
     return result
 
-def register_domain(client, Domain=None, Contacts=None):
-    result = client.register_domain(DomainName=Domain, DurationInYears=1,
-            AdminContact=Contacts['AdminContact'],
-            TechContact=Contacts['TechContact'],
-            RegistrantContact=Contacts['RegistrantContact']
+def register_domain(client, domain=None, contacts=None, duration=1, idn_lang=""):
+    if domain.startswith(_ACEPREFIX):
+        # Verify IDN Language Code (ISO-639-2)
+        pass
+
+    result = client.register_domain(
+            DomainName=domain,
+            IdnLangCode=idn_lang,
+            DurationInYears=duration,
+            AdminContact=contacts['AdminContact'],
+            TechContact=contacts['TechContact'],
+            RegistrantContact=contacts['RegistrantContact']
             )
     return result
 
@@ -68,7 +78,7 @@ if args['profile'] is None:
     parser.print_help()
     exit()
 
-session = boto3.session.Session(profile_name=args['profile'], region_name=R53REGION)
+session = boto3.session.Session(profile_name=args['profile'], region_name=_R53REGION)
 client = session.client('route53domains')
 
 if args['contacts_out'] is not None:
@@ -93,21 +103,26 @@ domains = read_domain_list(args['domainlist'])
 for domain in domains:
     try:
         result = {}
-        result = register_domain(client, Domain=domain, Contacts=contacts)
+        result = register_domain(client, domain=domain, contacts=contacts)
         print("Domain: '{}'".format(domain))
         print(result)
         if "ResponseMetadata" in result:
             sleep(result['ResponseMetadata']['RetryAttempts'])
+        sleep(2)
     except (client.exceptions.DomainLimitExceeded,
             client.exceptions.OperationLimitExceeded) as e:
         print("{}\n\nAborting! Contact AWS support and request a limit increase.".format(e))
         exit(1)
-    except (client.exceptions.ClientError) as e:
+    except (client.exceptions.InvalidInput) as e:
         print(e)
+        pass
+    except (client.exceptions.ClientError) as e:
+        #botocore.exceptions.ClientError: An error occurred (ThrottlingException) when calling the RegisterDomain operation (reached max retries: 4): Rate exceeded
+        print(e)
+        print("{}, {}, {}, {}, {}".format(e._get_retry_info, e.args, e.message, e.operation_name, e.response))
         exit()
     except Exception as e:
         print("Unhandled exception: {}".format(e))
         exit(-1)
 
 
-#botocore.exceptions.ClientError: An error occurred (ThrottlingException) when calling the RegisterDomain operation (reached max retries: 4): Rate exceeded
